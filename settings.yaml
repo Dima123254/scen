@@ -1,0 +1,20 @@
+# Общие настройки движка моделирования угроз (без привязки к организации).
+engine:
+  default_tactic_chain: ["Т1", "Т2", "Т3", "Т4", "Т5", "Т6", "Т7", "Т8", "Т9", "Т10"]
+  merge_ubi_tactics_into_chain: true
+  deduplicate_tactics: true
+
+paths:
+  validation_config: "config/validation_config.yaml"
+  matrix_display: "config/matrix_display.yaml"
+  log_filename: "threat_engine.log"
+
+# Визуализация: matrix — HTML-матрица как в методичке; graph — pyvis; both — оба варианта
+# max_visualized_scenarios: 0 или отрицательное = без лимита (все сценарии в matrices/graphs);
+# положительное число — только первые N (быстрее при тысячах файлов).
+visualization:
+  mode: matrix
+  max_visualized_scenarios: 0
+
+scenarios:
+  id_prefix: "SCN"

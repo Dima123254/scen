@@ -1,0 +1,69 @@
+{
+  "_readme": "Скопируйте файл в company_data.json и заполните. Поля _help в объектах — подсказки; их можно удалить после заполнения.",
+  "meta": {
+    "_help": "meta: сведения об организации и модели; company_name обязателен.",
+    "company_name": "ВАША_ОРГАНИЗАЦИЯ",
+    "system_name": "Имя ИС или контура",
+    "author": "ФИО автора модели угроз",
+    "date": "2026-04-05"
+  },
+  "assets": [
+    {
+      "_help": "id — уникальный ключ; zone: Internal | External | DMZ | Filial; interfaces — каналы доступа (совпадают с интерфейсами нарушителя для фильтра).",
+      "id": "ext_web",
+      "name": "Веб-шлюз",
+      "zone": "External",
+      "interfaces": ["web"],
+      "data_types": ["публичные данные"],
+      "description": "Точка входа из Интернет"
+    },
+    {
+      "id": "dmz_app",
+      "name": "Сервер приложений DMZ",
+      "zone": "DMZ",
+      "interfaces": ["web", "lan"],
+      "data_types": ["сессии"],
+      "description": "Демилитаризованная зона"
+    },
+    {
+      "id": "int_db",
+      "name": "Внутренняя БД",
+      "zone": "Internal",
+      "interfaces": ["lan", "internal_api"],
+      "data_types": ["ПДн", "коммерческая тайна"],
+      "description": "Критичный актив"
+    }
+  ],
+  "topology": [
+    {
+      "_help": "Связи между id активов; from — исходящий узел (ключ JSON — from).",
+      "from": "ext_web",
+      "to": "dmz_app",
+      "protocol": "HTTPS"
+    },
+    {
+      "from": "dmz_app",
+      "to": "int_db",
+      "protocol": "TCP"
+    }
+  ],
+  "attackers": [
+    {
+      "_help": "type — произвольная строка; level: Н1–Н4; category: External | Internal | External/Internal; interfaces — опционально (иначе defaults из validation_config.yaml).",
+      "type": "Отдельные физические лица (хакеры)",
+      "level": "Н2",
+      "category": "External",
+      "goals": ["получение данных"],
+      "interfaces": ["web"]
+    }
+  ],
+  "threats": ["УБИ.1", "УБИ.2"],
+  "business_processes": [
+    {
+      "_help": "Связь процессов с угрозами и последствиями для приложений 7–10.",
+      "name": "Обработка заявок",
+      "threats": ["УБИ.1"],
+      "consequences": ["нарушение конфиденциальности"]
+    }
+  ]
+}

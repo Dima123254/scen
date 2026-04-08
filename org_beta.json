@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "company_name": "Тестовая организация Beta",
+    "system_name": "CRM",
+    "author": "pytest",
+    "date": "2026-01-02"
+  },
+  "assets": [
+    {"id": "e1", "name": "Ext1", "zone": "External", "interfaces": ["web"], "data_types": [], "description": ""},
+    {"id": "i1", "name": "Int1", "zone": "Internal", "interfaces": ["lan"], "data_types": [], "description": ""}
+  ],
+  "topology": [
+    {"from": "e1", "to": "i1", "protocol": "HTTP"}
+  ],
+  "attackers": [
+    {"type": "Внешний", "level": "Н1", "category": "External", "goals": [], "interfaces": ["web"]}
+  ],
+  "threats": ["УБИ.1"],
+  "business_processes": []
+}

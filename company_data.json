@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "company_name": "Демонстрационная организация А",
+    "system_name": "КИС учёта",
+    "author": "Аналитик",
+    "date": "2026-04-05"
+  },
+  "assets": [
+    {
+      "id": "ext_web",
+      "name": "Веб-шлюз",
+      "zone": "External",
+      "interfaces": ["web"],
+      "data_types": ["публичные данные"],
+      "description": "Периметр"
+    },
+    {
+      "id": "dmz_app",
+      "name": "Сервер DMZ",
+      "zone": "DMZ",
+      "interfaces": ["web", "lan"],
+      "data_types": ["сессии"],
+      "description": "DMZ"
+    },
+    {
+      "id": "int_db",
+      "name": "Внутренняя БД",
+      "zone": "Internal",
+      "interfaces": ["lan", "internal_api"],
+      "data_types": ["конфиденциальные данные"],
+      "description": "База"
+    }
+  ],
+  "topology": [
+    {"from": "ext_web", "to": "dmz_app", "protocol": "HTTPS"},
+    {"from": "dmz_app", "to": "int_db", "protocol": "TCP"}
+  ],
+  "attackers": [
+    {
+      "type": "Отдельные физические лица (хакеры)",
+      "level": "Н2",
+      "category": "External",
+      "goals": ["эксфильтрация"],
+      "interfaces": ["web"]
+    }
+  ],
+  "threats": ["УБИ.1", "УБИ.11"],
+  "business_processes": [
+    {
+      "name": "Учёт данных",
+      "threats": ["УБИ.1"],
+      "consequences": ["утечка"]
+    }
+  ]
+}

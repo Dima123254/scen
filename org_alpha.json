@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "company_name": "Тестовая организация Alpha",
+    "system_name": "ERP",
+    "author": "pytest",
+    "date": "2026-01-01"
+  },
+  "assets": [
+    {"id": "e1", "name": "Ext1", "zone": "External", "interfaces": ["web"], "data_types": [], "description": ""},
+    {"id": "d1", "name": "Dmz1", "zone": "DMZ", "interfaces": ["web", "lan"], "data_types": [], "description": ""},
+    {"id": "i1", "name": "Int1", "zone": "Internal", "interfaces": ["lan", "web"], "data_types": [], "description": ""}
+  ],
+  "topology": [
+    {"from": "e1", "to": "d1", "protocol": "HTTPS"},
+    {"from": "d1", "to": "i1", "protocol": "TCP"}
+  ],
+  "attackers": [
+    {"type": "Хакер", "level": "Н4", "category": "External", "goals": [], "interfaces": ["web"]}
+  ],
+  "threats": ["УБИ.1"],
+  "business_processes": []
+}

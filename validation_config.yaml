@@ -1,0 +1,31 @@
+# Включение фильтров валидации сценариев
+enable_level_check: true
+enable_topology_check: true
+enable_ubi_consistency: true
+enable_interface_check: true
+
+thresholds:
+  max_scenarios_per_ubi: 10
+  min_scenarios_required: 1
+
+# Если у внешнего нарушителя в данных не указаны интерфейсы, допускаются эти
+default_external_interfaces:
+  - "web"
+  - "email"
+  - "vpn"
+  - "api_public"
+
+# Если у внутреннего нарушителя не указаны интерфейсы — считаем доступ к внутренним каналам
+default_internal_interfaces:
+  - "lan"
+  - "internal_api"
+  - "admin_console"
+
+reporting:
+  format:
+    - "json"
+    - "txt"
+    - "xlsx"
+  include_failed: true
+  include_statistics: true
+  include_graph: true

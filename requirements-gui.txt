@@ -1,0 +1,3 @@
+# Дополнительно к requirements.txt — для простого окна в браузере
+-r requirements.txt
+streamlit>=1.28.0
