@@ -1,264 +1,414 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Построение сценариев угроз по УБИ, нарушителю и активу (ФСТЭК Прил. 11 + фильтр по уровню)."""
+"""
+Система автоматизированного формирования сценариев реализации угроз безопасности информации
+по методологии ФСТЭК России.
+"""
 
-from __future__ import annotations
+import csv
+import io
+import json
+from dataclasses import dataclass, field
+from typing import List, Dict, Set, Optional
 
-import hashlib
-import logging
-from typing import Any
+# --- КОНФИГУРАЦИЯ ДАННЫХ (Вставлено из запроса пользователя) ---
 
-from config.bdu_realization_methods import (
-    BDU_OFFICIAL_SECTION_URL,
-    pick_bdu_realization_methods_for_ubi,
-)
-from config.attacker_level_mapping import (
-    UBI_TO_FINAL_TECHNIQUE,
-    fstec_technique_parent_tactic,
-    get_allowed_technique_ids,
-    tactics_for_level_and_ubi,
-)
-from config.fstec_techniques_database import FSTEC_TACTICS_AND_TECHNIQUES
-from config.mapping_config import UBI_TO_TACTIC_MAPPING, normalize_fstec_tactic
-from core.models import Asset, Attacker, CompanyData
-from core.threat_mapper import mitre_techniques_for_tactic, mitre_tactic_name, ubi_tactics
+DATA_THREATS = """Идентификатор;Наименование;Описание
+УБИ.1;Угроза утечки информации;Угроза заключается в возможности противоправного получения либо передачи информации.
+УБИ.2;Угроза несанкционированного доступа;Угроза заключается в получении доступа к информационным ресурсам, нарушающего установленные правила разграничения доступа.
+УБИ.3;Угроза несанкционированной модификации;Угроза заключается в изменении содержания или формы представления обрабатываемой информации.
+УБИ.4;Угроза несанкционированной подмены;Угроза заключается во внедрении ложного или подмене существующего компонента информационной системы.
+УБИ.5;Угроза удаления информационных ресурсов;Угроза заключается в несанкционированном удалении обрабатываемой информации.
+УБИ.6;Угроза отказа в обслуживании;Угроза заключается в недоступности информационной системы или приостановлении оказания услуг.
+УБИ.7;Угроза ненадлежащего использования;Угроза заключается в использовании вычислительных ресурсов для осуществления сторонних процессов.
+УБИ.8;Угроза нарушения функционирования;Угроза заключается в частичной или полной утрате работоспособности компонента или системы.
+УБИ.9;Угроза получения ресурсов из недоверенного источника;Угроза заключается в нарушении функционирования системы вследствие получения компонентов из недоверенных источников.
+УБИ.10;Угроза распространения противоправной информации;Угроза заключается в распространении противоправной информации с применением информационной системы.
+УБИ.11;Угроза несанкционированного массового сбора информации;Угроза заключается в несанкционированном сборе информации с использованием автоматизированных средств."""
 
-logger = logging.getLogger(__name__)
+DATA_OBJECTS = """Идентификатор;Наименование;Описание
+О.1;Автоматизированное рабочее место;Комплекс вычислительной техники и программного обеспечения.
+О.2;Сервер;Совокупность средств вычислительной техники для управления и хранения информации в сети.
+О.3;Периферийное оборудование;Устройства, подключаемые к рабочим местам, серверам или мобильным устройствам.
+О.4;Устройство хранения данных;Носитель информации, предназначенный для записи и хранения данных.
+О.5;Устройство интернета-вещей;Программно-техническое средство, использующее датчики и API-интерфейсы.
+О.6;Активное сетевое оборудование;Оборудование, выполняющее функции преобразования, усиления и передачи сигналов.
+О.7;Обеспечивающие системы;Система, служащая дополнением к рассматриваемой системе на протяжении жизненного цикла.
+О.8;Телефония;Программно-аппаратные средства для обеспечения коммуникации.
+О.9;Средства защиты информации;Программное или программно-техническое средство для предотвращения несанкционированного доступа.
+О.10;Мобильное устройство;Мобильный программно-технический комплекс.
+О.11;Информация;Сведения независимо от формы их представления.
+О.12;Физические линии связи;Физическая среда, по которой передаются электрические информационные сигналы."""
 
-DEFAULT_CHAIN = ["Т1", "Т2", "Т3", "Т4", "Т5", "Т6", "Т7", "Т8", "Т9", "Т10"]
+DATA_MATRIX_THREAT_OBJ = """Объект;УБИ.1;УБИ.2;УБИ.3;УБИ.4;УБИ.5;УБИ.6;УБИ.7;УБИ.8;УБИ.9;УБИ.10;УБИ.11
+О.1;+;+;+;+;+;+;+;+;;+;+
+О.2;+;+;+;+;+;+;+;+;;+;+
+О.3;+;+;+;+;;+;;+;;+;+
+О.4;+;+;+;+;+;+;+;+;;;
+О.5;+;+;+;+;;+;+;+;;+;+
+О.6;+;+;+;+;+;+;+;+;;+;+
+О.7;;;;;;;+;;;;
+О.8;+;+;+;+;+;+;+;+;;+;+
+О.9;+;+;+;+;+;+;;+;;+;+
+О.10;+;+;+;+;+;+;+;+;;+;+
+О.11;;;;;;;;+;;+
+О.12;+;+;+;+;+;+;;+;;+"""
 
+DATA_COMPONENTS = """Идентификатор;Наименование;Тип;Группа;Привязка_к_объектам
+К.1.1.1;Прошивка;К.1 Программное обеспечение;К.1.1 Микропрограммное обеспечение;О.1,О.2,О.3,О.4,О.5,О.6,О.7,О.8,О.9,О.10
+К.1.1.2;UEFI/BIOS;К.1;К.1.1;О.1,О.2
+К.1.2.1;Операционная система;К.1;К.1.2 Системное ПО;О.1,О.2
+К.1.2.2;Мобильная ОС;К.1;К.1.2;О.10
+К.1.2.3;Программная оболочка;К.1;К.1.2;О.1,О.2
+К.1.2.4;Драйвер;К.1;К.1.2;О.1,О.2,О.10
+К.1.2.6;Загрузчик ОС;К.1;К.1.2;О.1,О.2,О.10
+К.1.3.1;Системные и сетевые службы;К.1;К.1.3 Сервисное ПО;О.1,О.2,О.10
+К.1.3.5;Файловый сервер;К.1;К.1.3;О.11
+К.1.3.6;Сервер электронной почты;К.1;К.1.3;О.11
+К.1.5.5;СУБД;К.1;К.1.5 Прикладное ПО;О.11
+К.1.5.6;Мобильное приложение;К.1;К.1.5;О.10
+К.1.5.11;Офисное ПО;К.1;К.1.5;О.1
+К.1.5.15;Веб-браузер;К.1;К.1.5;О.1,О.10
+К.2.1.2;Монитор;К.2 Программно-аппаратные средства;К.2.1 Периферия;О.1
+К.2.1.3;Мышь;К.2;К.2.1;О.1
+К.2.1.4;Клавиатура;К.2;К.2.1;О.1
+К.2.2.8;Сетевой интерфейс;К.2;К.2.2 Интерфейсы;О.1,О.2,О.6
+К.3.1.1;Проводной канал;К.3 Сетевые компоненты;К.3.1 Канал;О.6,О.12
+К.3.1.2;Беспроводной канал;К.3;К.3.1;О.6,О.12
+К.3.2.2;Протоколы обмена;К.3;К.3.2 Протокол;О.6
+К.4.1.1;Администратор;К.4 Пользователи;К.4.1 Привилегированные;О.1,О.2,О.11
+К.4.2.1;Непривилегированный сотрудник;К.4;К.4.2 Непривилегированные;О.1,О.10,О.11"""
 
-class ThreatScenarioBuilder:
-    """Формирует цепочки тактик и сценарии с техниками Приложения 11 (фильтр по уровню Н1–Н4)."""
+DATA_METHODS = """Идентификатор;Наименование;Группа;Уровень_нарушителя;Связанные_угрозы;Связанные_меры
+СП.1.1;Эксплуатация известных уязвимостей;СП.1;В.1;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.6,УБИ.7,УБИ.8,УБИ.10,УБИ.11;ОПС.2.5,АУД.2.1,АУД.2.2,АУД.2.3,АУД.2.4
+СП.1.2;Эксплуатация уязвимостей нулевого дня;СП.1;В.2;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.6,УБИ.7,УБИ.8,УБИ.10,УБИ.11;ОПС.2.5,АУД.2.1,АУД.2.2,АУД.2.4
+СП.2.1;Использование недостатков проверки входных данных;СП.2;В.2;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.6,УБИ.7,УБИ.8,УБИ.9,УБИ.10,УБИ.11;ОЦЛ.3.1,ОЦЛ.4.2,УКФ.2.2,УКФ.4.1
+СП.2.2;Использование недостатков управления учетными данными;СП.2;В.1;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.6,УБИ.7,УБИ.8,УБИ.9,УБИ.10,УБИ.11;УПД.1.1,УПД.1.2,УПД.1.3,УПД.1.4,УПД.1.5,УПД.1.6,УПД.1.7,УПД.1.8,УПД.1.9
+СП.4.1;Внедрение вредоносного ПО через почту;СП.4;В.1;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.6,УБИ.7,УБИ.8,УБИ.9,УБИ.10,УБИ.11;ЗИС.28.1,ЗИС.29.1,АВЗ.1.5,АВЗ.1.1,АВЗ.2.1,ЗИС.15.1,ЗИС.16.1,ЗИС.17.1
+СП.4.3;Внедрение вредоносного ПО через сайты;СП.4;В.1;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.6,УБИ.7,УБИ.8,УБИ.9,УБИ.10,УБИ.11;АВЗ.1.5,АВЗ.1.1,АВЗ.2.1,ЗИС.18.1
+СП.7.1;Прослушивание интерфейсов сети;СП.7;В.1;УБИ.1,УБИ.2,УБИ.11;ЗИС.2.2,ЗИС.19.1
+СП.10.1;Атака человек посередине HTTP;СП.10;В.1;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5;ЗИС.27.1
+СП.13.4;Почтовый фишинг;СП.13;В.1;УБИ.1,УБИ.2,УБИ.3,УБИ.5,УБИ.8,УБИ.9,УБИ.10,УБИ.11;ОЦЛ.4.2,АВЗ.1.5,ЗИС.17.2,АВЗ.1.1,АВЗ.2.1,ЗИС.15.1,ЗИС.16.1,ЗИС.17.1,ЗИС.18.1,АВЗ.3.1,ЗИС.7.1,ИПО.1.1,ИПО.2.1,ИПО.3.1,ИПО.4.1,АВЗ.1.6,АВЗ.1.7,ОЦЛ.4.1
+СП.14.1;DoS в прикладном ПО;СП.14;В.2;УБИ.5,УБИ.6;УПД.6.2,ОПО.1.1,ОПО.2.1,СОВ.1.1,ОДТ.2.1,ОДТ.2.2,ОДТ.2.3,ЗИС.34.2
+СП.17.1;Перебор паролей;СП.17;В.2;УБИ.2;УПД.6.2,УПД.6.1
+СП.22.1;SQL-инъекция;СП.22;В.2;УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.7,УБИ.8,УБИ.10,УБИ.11;АУД.2.1,АУД.2.2,АУД.2.3,АУД.2.4,ЗИС.35.1,ЗИС.35.7
+СП.24.1;Кража носителей информации;СП.24;В.1;УБИ.1,УБИ.5,УБИ.6,УБИ.8;ЗНИ.2.1,ЗНИ.2.2,ЗНИ.4.2,ЗНИ.3.1,ЗНИ.3.2,ЗНИ.3.3,ЗНИ.3.4,ЗНИ.4.1,ЗНИ.4.3,ЗНИ.1.1,ЗНИ.1.2,ЗНИ.1.3,ЗНИ.8.1,ЗНИ.8.2
+СП.26.1;Воздействие на поставщика СХД;СП.26;В.3;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.6,УБИ.7,УБИ.8,УБИ.9,УБИ.10,УБИ.11;ЗИС.26.1,ЗИС.26.2,АУД.1.2,ЗИС.39.4,АУД.1.4,ЗИС.33.1"""
 
-    def __init__(self, settings: dict[str, Any] | None = None) -> None:
-        self._settings = settings or {}
-        eng = self._settings.get("engine") or {}
-        self._default_chain: list[str] = list(
-            eng.get("default_tactic_chain") or DEFAULT_CHAIN
-        )
-        self._merge_ubi = bool(eng.get("merge_ubi_tactics_into_chain", True))
-        self._dedupe = bool(eng.get("deduplicate_tactics", True))
-        self._id_prefix = str((self._settings.get("scenarios") or {}).get("id_prefix", "SCN"))
-        self.techniques_db = FSTEC_TACTICS_AND_TECHNIQUES
+DATA_CONSEQUENCES = """Идентификатор;Наименование;Описание;Категория_ущерба
+Н.1;Угроза жизни или здоровью;Данные уточняются;Ущерб физическому лицу
+Н.2;Нарушение неприкосновенности частной жизни;Данные уточняются;Ущерб физическому лицу
+Н.7;Нарушение конфиденциальности персональных данных;Данные уточняются;Ущерб физическому лицу
+Н.9;Нарушение законодательства РФ;Данные уточняются;Риски юридическому лицу
+Н.10;Потеря денежных средств;Данные уточняются;Риски юридическому лицу
+Н.12;Затраты на штрафы;Данные уточняются;Риски юридическому лицу
+Н.20;Нарушение деловой репутации;Данные уточняется;Риски юридическому лицу
+Н.26;Простой информационной системы;Данные уточняется;Риски юридическому лицу
+Н.30;Утечка конфиденциальной информации;Данные уточняется;Риски юридическому лицу
+Н.31;Причинение ущерба жизни и здоровью людей;Данные уточняется;Ущерб государству
+Н.34;Нарушение функционирования госоргана;Данные уточняется;Ущерб государству
+Н.39;Ущерб бюджетам РФ;Данные уточняется;Ущерб государству
+Н.42;Нарушение законодательства РФ;Данные уточняется;Ущерб государству
+Н.51;Утечка информации ограниченного доступа;Данные уточняется;Ущерб государству
+Н.52;Непредставление государственных услуг;Данные уточняется;Ущерб государству"""
 
-    def get_techniques_for_tactic(self, tactic: str) -> list[str]:
-        """Техники MITRE для тактики (сквозное сопоставление с ATT&CK)."""
-        return mitre_techniques_for_tactic(tactic)
+DATA_MATRIX_THREAT_CONS = """Угроза;Н.1;Н.2;Н.7;Н.9;Н.10;Н.12;Н.20;Н.26;Н.30;Н.31;Н.34;Н.39;Н.42;Н.51;Н.52
+УБИ.1;;+;+;+;+;+;+;;+;;;+;+;
+УБИ.2;;+;+;+;+;+;+;;+;;;+;+;
+УБИ.3;+;+;;+;+;+;+;+;+;+;+;+;+;;
+УБИ.4;+;+;+;+;+;+;+;+;+;+;+;+;+;;
+УБИ.5;;+;;+;+;+;+;+;+;+;+;+;+;+;
+УБИ.6;+;;;+;+;+;+;+;+;+;+;+;+;+;
+УБИ.7;;+;;+;+;+;+;+;+;;;+;;
+УБИ.8;+;;;+;+;+;+;+;+;+;+;+;+;+;
+УБИ.9;;;;;+;+;+;+;;;;+;;
+УБИ.10;;+;;+;+;+;+;+;+;;;+;;
+УБИ.11;;+;+;;+;+;+;+;;;;;+;+;"""
 
-    def _get_allowed_technique_set(self, level: str) -> set[str] | None:
-        """None означает все техники (уровень Н4)."""
-        ids = get_allowed_technique_ids(level)
-        if ids is None:
-            return None
-        return set(ids)
+DATA_MEASURES = """Идентификатор;Наименование;Группа;Подгруппа;Парируемые_способы;Парируемые_угрозы
+АВЗ.1.1;Применение средств антивирусной защиты на АРМ и серверах;АВЗ;АВЗ.1;СП.4.1,СП.4.3,СП.13.4,СП.15.1;УБИ.1,УБИ.2,УБИ.3,УБИ.5,УБИ.8,УБИ.9,УБИ.10,УБИ.11
+АУД.2.1;Выявление уязвимостей;АУД;АУД.2;СП.1.1,СП.1.2,СП.22.1,СП.22.25;УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.7,УБИ.8,УБИ.10,УБИ.11
+ЗИС.27.1;Обеспечение подлинности сетевых соединений;ЗИС;ЗИС.27;СП.10.1,СП.10.2,СП.10.3,СП.10.4,СП.10.5,СП.10.6,СП.10.7;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5
+ЗИС.35.1;Фильтрация сетевого трафика;ЗИС;ЗИС.35;СП.8.1,СП.8.2,СП.22.1,СП.22.28;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.6,УБИ.7,УБИ.8,УБИ.9,УБИ.10,УБИ.11
+УПД.6.2;Блокирование при превышении попыток входа;УПД;УПД.6;СП.17.1,СП.17.2,СП.17.3,СП.17.4,СП.17.5;УБИ.2
+ИПО.1.1;Информирование персонала;ИПО;ИПО.1;СП.13.4,СП.13.6,СП.13.7,СП.22.22,СП.22.23,СП.22.27;УБИ.1,УБИ.2,УБИ.3,УБИ.5,УБИ.8,УБИ.9,УБИ.10,УБИ.11
+ЗНИ.2.1;Определение лиц с физическим доступом к носителям;ЗНИ;ЗНИ.2;СП.24.1;УБИ.2
+ОДТ.2.2;Применение резервных технических средств;ОДТ;ОДТ.2;СП.14.1,СП.14.2,СП.14.3,СП.14.4,СП.14.6;УБИ.5,УБИ.6
+ОПС.2.5;Устранение уязвимостей настройкой ПО;ОПС;ОПС.2;СП.1.1,СП.1.2,СП.4.6,СП.4.10,СП.4.11,СП.15.1,СП.15.2;УБИ.1,УБИ.2,УБИ.3,УБИ.4,УБИ.5,УБИ.6,УБИ.7,УБИ.8,УБИ.10,УБИ.11"""
 
-    def _allowed_techniques_for_tactic(
-        self, tactic_id: str, allowed: set[str] | None
-    ) -> dict[str, str]:
-        """Словарь id→название только для техник, разрешённых уровню."""
-        block = self.techniques_db.get(tactic_id, {})
-        all_t = dict(block.get("techniques") or {})
-        if allowed is None:
-            return all_t
-        return {k: v for k, v in all_t.items() if k in allowed}
+DATA_ATTACKERS = """Идентификатор;Наименование;Описание;Типы_нарушителей
+В.1;Нарушитель с базовыми возможностями;Использует только известные уязвимости и общедоступные инструменты. Обладает базовыми компьютерными знаниями. Реализует угрозы за счет физических воздействий при наличии доступа.;Физическое лицо, Лица обеспечивающие поставку, Лица обеспечивающие функционирование, Авторизованные пользователи, Бывшие работники
+В.2;Нарушитель с базовыми повышенными возможностями;Владеет фреймворками, понимает механизмы работы инструментов, может вносить изменения. Планирует сценарии самостоятельно. Знает защитные механизмы. Не имеет доступа к физически изолированным сегментам.;Преступные группы, Конкурирующие организации, Поставщики услуг, Лица привлекаемые для работ, Системные администраторы
+В.3;Нарушитель со средними возможностями;Приобретает информацию об уязвимостях на платных ресурсах. Разрабатывает собственные инструменты. Анализирует программный код. Глубоко понимает защитные механизмы. Работает в группе.;Террористические группировки, Разработчики ПО и ПА
+В.4;Нарушитель с высокими возможностями;Имеет доступ к исходному коду. Внедряет закладки на этапах поставки. Создает методы с привлечением научных организаций. Применяет специальные технические средства. Реализует угрозы долговременно и скрытно.;Специальные службы иностранных государств"""
 
-    def build_tactic_chain(self, ubi: str, attacker_level: str | None = None) -> list[str]:
-        """Цепочка тактик с учётом УБИ и допустимых для уровня тактик."""
-        level = attacker_level or "Н2"
-        finals = UBI_TO_FINAL_TECHNIQUE.get(ubi, ["T10.1"])
-        allowed_tac = set(tactics_for_level_and_ubi(level, finals))
+# --- МОДЕЛИ ДАННЫХ ---
 
-        chain: list[str] = []
-        seen: set[str] = set()
-        for t in self._default_chain:
-            if self._dedupe and t in seen:
+@dataclass
+class Threat:
+    id: str
+    name: str
+    description: str
+
+@dataclass
+class Object:
+    id: str
+    name: str
+    description: str
+
+@dataclass
+class Component:
+    id: str
+    name: str
+    type: str
+    group: str
+    allowed_objects: List[str]
+
+@dataclass
+class Attacker:
+    id: str
+    name: str
+    description: str
+    types: List[str]
+    level: int  # 1 for В.1, 2 for В.2, etc.
+
+@dataclass
+class Method:
+    id: str
+    name: str
+    group: str
+    required_attacker_level: int
+    related_threats: List[str]
+    related_measures: List[str]
+
+@dataclass
+class Consequence:
+    id: str
+    name: str
+    description: str
+    category: str
+
+@dataclass
+class Measure:
+    id: str
+    name: str
+    group: str
+    subgroup: str
+    countered_methods: List[str]
+    countered_threats: List[str]
+
+@dataclass
+class Scenario:
+    id: str
+    attacker_profile: str
+    threat_id: str
+    method_id: str
+    object_id: str
+    component_id: str
+    consequences: List[str]
+    recommended_measures: List[str]
+    criticality: float
+    is_valid: bool = True
+
+# --- ЗАГРУЗЧИКИ ДАННЫХ ---
+
+def parse_csv(data: str) -> List[Dict[str, str]]:
+    f = io.StringIO(data)
+    reader = csv.DictReader(f, delimiter=';')
+    return list(reader)
+
+def load_databases():
+    db = {
+        'threats': {},
+        'objects': {},
+        'components': [],
+        'attackers': {},
+        'methods': [],
+        'consequences': {},
+        'measures': [],
+        'matrix_threat_obj': {}, # ObjectID -> Set[ThreatID]
+        'matrix_threat_cons': {}, # ThreatID -> Set[ConsequenceID]
+        'attacker_levels': {'В.1': 1, 'В.2': 2, 'В.3': 3, 'В.4': 4}
+    }
+
+    # Threats
+    for row in parse_csv(DATA_THREATS):
+        db['threats'][row['Идентификатор']] = Threat(row['Идентификатор'], row['Наименование'], row['Описание'])
+
+    # Objects
+    for row in parse_csv(DATA_OBJECTS):
+        db['objects'][row['Идентификатор']] = Object(row['Идентификатор'], row['Наименование'], row['Описание'])
+
+    # Matrix Threat-Object
+    matrix_rows = parse_csv(DATA_MATRIX_THREAT_OBJ)
+    for row in matrix_rows:
+        obj_id = row['Объект']
+        threats = set()
+        for key, val in row.items():
+            if key != 'Объект' and val == '+':
+                threats.add(key)
+        db['matrix_threat_obj'][obj_id] = threats
+
+    # Components
+    for row in parse_csv(DATA_COMPONENTS):
+        objs = row['Привязка_к_объектам'].split(',') if row['Привязка_к_объектам'] else []
+        db['components'].append(Component(row['Идентификатор'], row['Наименование'], row['Тип'], row['Группа'], objs))
+
+    # Attackers
+    for row in parse_csv(DATA_ATTACKERS):
+        types = row['Типы_нарушителей'].split(', ')
+        level = db['attacker_levels'].get(row['Идентификатор'], 0)
+        db['attackers'][row['Идентификатор']] = Attacker(row['Идентификатор'], row['Наименование'], row['Описание'], types, level)
+
+    # Methods
+    for row in parse_csv(DATA_METHODS):
+        threats = row['Связанные_угрозы'].split(',') if row['Связанные_угрозы'] else []
+        measures = row['Связанные_меры'].split(',') if row['Связанные_меры'] else []
+        level = db['attacker_levels'].get(row['Уровень_нарушителя'], 0)
+        db['methods'].append(Method(row['Идентификатор'], row['Наименование'], row['Группа'], level, threats, measures))
+
+    # Consequences
+    for row in parse_csv(DATA_CONSEQUENCES):
+        db['consequences'][row['Идентификатор']] = Consequence(row['Идентификатор'], row['Наименование'], row['Описание'], row['Категория_ущерба'])
+
+    # Matrix Threat-Consequence
+    matrix_rows = parse_csv(DATA_MATRIX_THREAT_CONS)
+    for row in matrix_rows:
+        threat_id = row['Угроза']
+        cons = set()
+        for key, val in row.items():
+            if key != 'Угроза' and val == '+':
+                cons.add(key)
+        db['matrix_threat_cons'][threat_id] = cons
+
+    # Measures
+    for row in parse_csv(DATA_MEASURES):
+        methods = row['Парируемые_способы'].split(',') if row['Парируемые_способы'] else []
+        threats = row['Парируемые_угрозы'].split(',') if row['Парируемые_угрозы'] else []
+        db['measures'].append(Measure(row['Идентификатор'], row['Наименование'], row['Группа'], row['Подгруппа'], methods, threats))
+
+    return db
+
+# --- ЛОГИКА ГЕНЕРАЦИИ СЦЕНАРИЕВ ---
+
+def calculate_criticality(consequences: List[str], attacker_level: int, measures_count: int, total_measures_count: int) -> float:
+    """
+    Расчет критичности сценария (заглушка).
+    Полная методика будет реализована позже.
+    """
+    # Пока возвращаем 0.0, так как расчет отключен
+    return 0.0
+
+def generate_scenarios(db):
+    scenarios = []
+    scenario_counter = 1
+
+    # Перебор всех объектов
+    for obj_id, obj in db['objects'].items():
+        # 1. Получаем применимые угрозы для объекта
+        applicable_threats = db['matrix_threat_obj'].get(obj_id, set())
+        if not applicable_threats:
+            continue
+
+        # Перебор компонентов, подходящих объекту
+        for comp in db['components']:
+            if obj_id not in comp.allowed_objects:
                 continue
-            if t not in allowed_tac:
-                continue
-            seen.add(t)
-            chain.append(t)
+            
+            # Перебор угроз, применимых к объекту
+            for threat_id in applicable_threats:
+                threat = db['threats'][threat_id]
+                
+                # Перебор способов реализации
+                for method in db['methods']:
+                    # Проверка Зависимость 4: Способ связан с Угрозой
+                    if threat_id not in method.related_threats:
+                        continue
+                    
+                    # Перебор нарушителей
+                    for att_id, attacker in db['attackers'].items():
+                        # Проверка Зависимость 3: Уровень нарушителя >= Уровню способа
+                        if attacker.level < method.required_attacker_level:
+                            continue
+                        
+                        # Валидация цепочки (Зависимость 7)
+                        # Нарушитель -> Угроза -> Способ -> Объект -> Компонент
+                        
+                        # Получение последствий (Зависимость 5)
+                        consequence_ids = db['matrix_threat_cons'].get(threat_id, set())
+                        consequence_names = [db['consequences'][cid].name for cid in consequence_ids]
+                        
+                        # Подбор мер защиты (Зависимость 6)
+                        # Ищем меры, которые парируют данный способ
+                        relevant_measures = []
+                        for measure in db['measures']:
+                            if method.id in measure.countered_methods:
+                                relevant_measures.append(measure.id)
+                        
+                        # Расчет критичности
+                        # Для примера считаем, что всего мер может быть больше, но мы нашли только relevant_measures
+                        # Допустим, total_measures = len(relevant_measures) + 2 (как эвристика наличия других мер)
+                        total_potential_measures = len(relevant_measures) + 2 
+                        crit = calculate_criticality(consequence_ids, attacker.level, 0, total_potential_measures) # 0 мер применено по умолчанию
+                        
+                        scenario = Scenario(
+                            id=f"SCN.{scenario_counter}",
+                            attacker_profile=f"{attacker.id} ({attacker.name})",
+                            threat_id=threat_id,
+                            method_id=method.id,
+                            object_id=obj_id,
+                            component_id=comp.id,
+                            consequences=consequence_names,
+                            recommended_measures=relevant_measures,
+                            criticality=crit
+                        )
+                        scenarios.append(scenario)
+                        scenario_counter += 1
 
-        if self._merge_ubi and ubi in UBI_TO_TACTIC_MAPPING:
-            for ut in ubi_tactics(ubi):
-                if ut not in chain:
-                    chain.append(ut)
-        return chain
-
-    def _select_relevant_techniques(
-        self,
-        tactic_id: str,
-        available_techniques: dict[str, str],
-        ubi_id: str,
-        final_techniques: list[str],
-        asset: Asset,
-    ) -> list[dict[str, str]]:
-        """Выбор релевантных техник (не весь список)."""
-        finals_here = [
-            f
-            for f in final_techniques
-            if fstec_technique_parent_tactic(f) == tactic_id
-        ]
-        selected: list[dict[str, str]] = []
-        if finals_here:
-            for ft in finals_here:
-                if ft in available_techniques:
-                    selected.append({"id": ft, "name": available_techniques[ft]})
-            if selected:
-                return selected
-            if tactic_id == "Т10":
-                items = list(available_techniques.items())[:2]
-                return [{"id": k, "name": v} for k, v in items]
-
-        zone = asset.zone.value
-        if tactic_id == "Т1":
-            if ubi_id == "УБИ.11":
-                priority = ["T1.1", "T1.2", "T1.9", "T1.12", "T1.15", "T1.4", "T1.11"]
-            else:
-                priority = ["T1.1", "T1.2", "T1.4", "T1.11", "T1.8", "T1.9"]
-        elif tactic_id == "Т2":
-            if zone == "DMZ":
-                priority = ["T2.1", "T2.3", "T2.5", "T2.4", "T2.8"]
-            else:
-                priority = ["T2.8", "T2.10", "T2.11", "T2.1", "T2.4"]
-        elif tactic_id == "Т3":
-            priority = ["T3.1", "T3.4", "T3.5", "T3.3", "T3.14"]
-        elif tactic_id == "Т4":
-            priority = ["T4.1", "T4.2", "T4.3", "T4.5"]
-        elif tactic_id == "Т5":
-            priority = ["T5.1", "T5.2", "T5.3", "T5.7", "T5.6"]
-        elif tactic_id == "Т6":
-            priority = ["T6.1", "T6.2", "T6.3", "T6.5", "T6.7"]
-        elif tactic_id == "Т7":
-            priority = ["T7.1", "T7.2", "T7.3", "T7.11", "T7.17"]
-        elif tactic_id == "Т8":
-            priority = ["T8.2", "T8.4", "T8.3", "T8.7", "T8.8"]
-        elif tactic_id == "Т9":
-            priority = ["T9.1", "T9.2", "T9.3", "T9.5", "T9.8", "T9.13"]
-        elif tactic_id == "Т10":
-            priority = list(available_techniques.keys())[:3]
-        else:
-            priority = list(available_techniques.keys())[:3]
-
-        for tech_id in priority:
-            if tech_id in available_techniques:
-                selected.append(
-                    {"id": tech_id, "name": available_techniques[tech_id]}
-                )
-                if len(selected) >= 3:
-                    break
-        return selected
-
-    def _build_fstec_techniques_by_tactic(
-        self,
-        ubi: str,
-        attacker: Attacker,
-        asset: Asset,
-        _company: CompanyData,
-    ) -> dict[str, list[dict[str, str]]]:
-        level = attacker.level.value
-        final_techniques = list(UBI_TO_FINAL_TECHNIQUE.get(ubi, ["T10.1"]))
-        tactics_order = tactics_for_level_and_ubi(level, final_techniques)
-        allowed_set = self._get_allowed_technique_set(level)
-        out: dict[str, list[dict[str, str]]] = {}
-
-        for tactic_id in tactics_order:
-            avail = self._allowed_techniques_for_tactic(tactic_id, allowed_set)
-            if not avail:
-                continue
-            picked = self._select_relevant_techniques(
-                tactic_id,
-                avail,
-                ubi,
-                final_techniques,
-                asset,
-            )
-            if picked:
-                out[tactic_id] = picked
-        return out
-
-    def build_scenario(
-        self,
-        ubi: str,
-        attacker: Attacker,
-        asset: Asset,
-        company: CompanyData,
-        index: int = 0,
-    ) -> dict[str, Any]:
-        level = attacker.level.value
-        chain = self.build_tactic_chain(ubi, attacker_level=level)
-        fstec_by_tactic = self._build_fstec_techniques_by_tactic(
-            ubi, attacker, asset, company
-        )
-        bdu_realization = pick_bdu_realization_methods_for_ubi(ubi)
-
-        techniques_by_tactic: dict[str, list[str]] = {}
-        mitre_by_tactic: dict[str, str] = {}
-        for t in chain:
-            base = normalize_fstec_tactic(t)
-            if base in fstec_by_tactic:
-                techniques_by_tactic[t] = [x["id"] for x in fstec_by_tactic[base]]
-            else:
-                techniques_by_tactic[t] = self.get_techniques_for_tactic(t)
-            mitre_by_tactic[t] = mitre_tactic_name(t)
-
-        aid = hashlib.sha256(
-            f"{attacker.type}|{attacker.level.value}|{attacker.category}".encode()
-        ).hexdigest()[:8]
-        scenario_id = f"{self._id_prefix}-{ubi}-{asset.id}-{aid}-{index}"
-
-        return {
-            "scenario_id": scenario_id,
-            "ubi": ubi,
-            "ubi_description": UBI_TO_TACTIC_MAPPING.get(ubi, {}).get("description", ""),
-            "ubi_final_fstec_techniques": list(
-                UBI_TO_FINAL_TECHNIQUE.get(ubi, ["T10.1"])
-            ),
-            "attacker": {
-                "type": attacker.type,
-                "level": attacker.level.value,
-                "category": attacker.category,
-                "goals": attacker.goals,
-                "interfaces": list(attacker.interfaces),
-            },
-            "asset": {
-                "id": asset.id,
-                "name": asset.name,
-                "zone": asset.zone.value,
-                "interfaces": list(asset.interfaces),
-                "data_types": list(asset.data_types),
-            },
-            "company_name": company.meta.company_name,
-            "system_name": company.meta.system_name,
-            "tactic_chain": chain,
-            "techniques_by_tactic": techniques_by_tactic,
-            "fstec_techniques_by_tactic": fstec_by_tactic,
-            "bdu_realization_methods": bdu_realization,
-            "bdu_realization_source_url": BDU_OFFICIAL_SECTION_URL,
-            "mitre_tactic_by_fstec": mitre_by_tactic,
-        }
-
-
-def build_all_scenarios(
-    company: CompanyData,
-    builder: ThreatScenarioBuilder,
-    max_per_ubi: int = 10,
-) -> list[dict[str, Any]]:
-    """Декартово произведение УБИ × нарушители × активы с ограничением per УБИ."""
-    ubis = list(company.threats)
-    scenarios: list[dict[str, Any]] = []
-    for ubi in ubis:
-        count = 0
-        for attacker in company.attackers:
-            for asset in company.assets:
-                if count >= max_per_ubi:
-                    logger.warning(
-                        "max_scenarios_per_ubi reached for %s (%s)", ubi, max_per_ubi
-                    )
-                    break
-                scenarios.append(
-                    builder.build_scenario(ubi, attacker, asset, company, count)
-                )
-                count += 1
-            if count >= max_per_ubi:
-                break
+    # Сортировка по убыванию критичности
+    scenarios.sort(key=lambda x: x.criticality, reverse=True)
     return scenarios
+
+# --- ОСНОВНОЙ ЗАПУСК ---
+
+if __name__ == "__main__":
+    print("Загрузка баз данных...")
+    db = load_databases()
+    print(f"Загружено угроз: {len(db['threats'])}")
+    print(f"Загружено объектов: {len(db['objects'])}")
+    print(f"Загружено компонентов: {len(db['components'])}")
+    print(f"Загружено способов: {len(db['methods'])}")
+    print(f"Загружено мер: {len(db['measures'])}")
+    
+    print("\nГенерация сценариев...")
+    scenarios = generate_scenarios(db)
+    print(f"Сгенерировано сценариев: {len(scenarios)}")
+    
+    print("\n--- ТОП-10 НАИБОЛЕЕ КРИТИЧНЫХ СЦЕНАРИЕВ ---")
+    for i, sc in enumerate(scenarios[:10]):
+        print(f"\n{i+1}. Сценарий {sc.id} (Критичность: {sc.criticality:.2f})")
+        print(f"   Нарушитель: {sc.attacker_profile}")
+        print(f"   Угроза: {sc.threat_id} -> {db['threats'][sc.threat_id].name}")
+        print(f"   Способ: {sc.method_id} -> {next((m.name for m in db['methods'] if m.id == sc.method_id), 'Unknown')}")
+        print(f"   Объект: {sc.object_id} -> {db['objects'][sc.object_id].name}")
+        print(f"   Компонент: {sc.component_id} -> {next((c.name for c in db['components'] if c.id == sc.component_id), 'Unknown')}")
+        print(f"   Последствия: {', '.join(sc.consequences[:3])}{'...' if len(sc.consequences) > 3 else ''}")
+        print(f"   Меры защиты: {', '.join(sc.recommended_measures[:3])}{'...' if len(sc.recommended_measures) > 3 else ''}")
+
+    # Экспорт в JSON (пример первых 5)
+    output_data = []
+    for sc in scenarios[:5]:
+        output_data.append({
+            "id": sc.id,
+            "attacker": sc.attacker_profile,
+            "threat": sc.threat_id,
+            "method": sc.method_id,
+            "object": sc.object_id,
+            "component": sc.component_id,
+            "consequences": sc.consequences,
+            "measures": sc.recommended_measures,
+            "criticality": sc.criticality
+        })
+    
+    print("\n--- JSON EXPORT SAMPLE ---")
+    print(json.dumps(output_data, ensure_ascii=False, indent=2))
